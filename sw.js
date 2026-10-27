@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump on every content change: a new version is what makes phones download the new files
-const VERSION = 'prep-6';
+const VERSION = 'prep-7';
 const FILES = [
   './',
   'index.html',
@@ -17,7 +17,8 @@ const FILES = [
   'sections/kafka.js',
   'sections/sysdesign.js',
   'sections/aspnet.js',
-  'sections/testing.js'
+  'sections/testing.js',
+  'sections/architecture.js'
 ];
 
 self.addEventListener('install', event => {
