@@ -1,6 +1,9 @@
 'use strict';
 
 const SECTIONS = (window.PREP || []).filter(s => s && Array.isArray(s.chapters));
+// Private sections arrive encrypted and join SECTIONS once their passphrase has been entered on this device
+const LOCKED = (window.PREP_LOCKED || []).filter(s => s && s.data);
+const KEYS = 'prep.keys';
 const KEY = 'prep.v1';
 const DAY = 24 * 60 * 60 * 1000;
 // Days until a card is due again, by box: box 0 comes back within the hour
@@ -161,6 +164,7 @@ function route() {
     return;
   }
   if (parts[0] === 'one') return oneQuestionView(parts[1]);
+  if (parts[0] === 'unlock') return unlockView(parts[1]);
   if (parts[0] === 's') return sectionView(parts[1]);
   if (parts[0] === 'q') return quizStart(parts[1], parts[2]);
   if (parts[0] === 'settings') return settingsView();
@@ -199,6 +203,11 @@ function homeView() {
       <div class="meter"><i style="width:${c.total ? Math.round(100 * c.mastered / c.total) : 0}%"></i></div>
     </a></li>`;
   }
+  for (const locked of LOCKED.filter(l => !section(l.id)))
+    html += `<li><a class="card" href="#/unlock/${locked.id}">
+      <div><strong>🔒 ${esc(locked.title)}</strong></div>
+      <div class="sub">Закрыто паролем — нажмите, чтобы открыть</div>
+    </a></li>`;
   render(html + '</ul></div>');
 
   const input = document.getElementById('search');
@@ -536,6 +545,76 @@ function finish() {
   session = null;
 }
 
+// ---------- private sections ----------
+
+const fromBase64 = b64 => Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+const toBase64 = bytes => btoa(String.fromCharCode(...new Uint8Array(bytes)));
+
+function savedKeys() {
+  try { return JSON.parse(localStorage.getItem(KEYS)) || {}; } catch { return {}; }
+}
+
+async function deriveKey(locked, passphrase) {
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: fromBase64(locked.salt), iterations: locked.iterations, hash: 'SHA-256' },
+    base, { name: 'AES-GCM', length: 256 }, true, ['decrypt']);
+}
+
+// A wrong key fails the AES-GCM tag check and throws, so success means the passphrase was right
+async function open(locked, key) {
+  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromBase64(locked.iv) }, key, fromBase64(locked.data));
+  const opened = JSON.parse(new TextDecoder().decode(plain));
+  if (!section(opened.id)) SECTIONS.push(opened);
+  searchIndex = null;
+}
+
+// Sections unlocked before are opened with the key this device kept, without asking again
+async function openSaved() {
+  const keys = savedKeys();
+  for (const locked of LOCKED) {
+    if (!keys[locked.id] || section(locked.id)) continue;
+    try {
+      const key = await crypto.subtle.importKey('raw', fromBase64(keys[locked.id]), 'AES-GCM', false, ['decrypt']);
+      await open(locked, key);
+    } catch {
+      delete keys[locked.id];
+      localStorage.setItem(KEYS, JSON.stringify(keys));
+    }
+  }
+}
+
+function unlockView(id) {
+  const locked = LOCKED.find(l => l.id === id);
+  if (!locked) return go('#/');
+  if (section(id)) return go('#/s/' + id);
+  setTitle(locked.title);
+  render(`
+    <p>Этот раздел зашифрован. Введите пароль — на этом устройстве он запомнится.</p>
+    <input type="password" id="pass" class="search" autocomplete="current-password" autocapitalize="off" autocorrect="off">
+    <button class="btn wide" id="unlock">Открыть</button>
+    <p class="muted" id="status"></p>`);
+  const input = document.getElementById('pass');
+  const status = document.getElementById('status');
+  const submit = async () => {
+    if (!input.value) { status.textContent = 'Введите пароль'; return; }
+    status.textContent = 'Проверяю…';
+    try {
+      const key = await deriveKey(locked, input.value.trim());
+      await open(locked, key);
+      const keys = savedKeys();
+      keys[id] = toBase64(await crypto.subtle.exportKey('raw', key));
+      try { localStorage.setItem(KEYS, JSON.stringify(keys)); } catch { /* opens this time, asks again next time */ }
+      go('#/s/' + id);
+    } catch {
+      status.textContent = 'Пароль не подошёл';
+    }
+  };
+  document.getElementById('unlock').onclick = submit;
+  input.onkeydown = e => { if (e.key === 'Enter') submit(); };
+  input.focus();
+}
+
 // ---------- settings ----------
 
 function settingsView() {
@@ -591,7 +670,7 @@ function settingsView() {
 document.getElementById('settings').onclick = () => go('#/settings');
 window.addEventListener('hashchange', route);
 applySettings();
-route();
+openSaved().finally(route);
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
