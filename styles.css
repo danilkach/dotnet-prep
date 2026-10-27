@@ -124,3 +124,13 @@ body.wrap-code pre code { white-space: pre-wrap; overflow-wrap: anywhere; }
   .hl-comment { color: #8d9a88; }
   .hl-attr { color: #e3c25a; }
 }
+
+/* Interview questions: the answer opens under its question */
+details { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; margin: 10px 0; }
+summary { list-style: none; cursor: pointer; padding: 12px 40px 12px 14px; position: relative; font-weight: 600; }
+summary::-webkit-details-marker { display: none; }
+summary::after { content: '＋'; position: absolute; right: 14px; top: 12px; color: var(--accent); font-weight: 400; }
+details[open] summary::after { content: '－'; }
+details[open] summary { border-bottom: 1px solid var(--border); }
+details > :not(summary) { margin-left: 14px; margin-right: 14px; }
+details > :last-child { margin-bottom: 12px; }

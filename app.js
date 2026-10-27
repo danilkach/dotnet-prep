@@ -252,10 +252,9 @@ function pageView(sectionId, chapterId, pageArg) {
   save();
 
   setTitle(ch.title);
-  const prevChapter = s.chapters[index - 1];
   const nextChapter = s.chapters[index + 1];
-  const prevHref = page > 0 ? `#/s/${s.id}/c/${ch.id}/${page - 1}`
-    : prevChapter ? `#/s/${s.id}/c/${prevChapter.id}/${pagesOf(prevChapter).length - 1}` : null;
+  // A chapter's first page has nothing before it: the previous chapter is chosen from the list, not swiped into
+  const prevHref = page > 0 ? `#/s/${s.id}/c/${ch.id}/${page - 1}` : null;
   const nextHref = page < pages.length - 1 ? `#/s/${s.id}/c/${ch.id}/${page + 1}`
     : nextChapter ? `#/s/${s.id}/c/${nextChapter.id}/0` : null;
   const last = page === pages.length - 1;
@@ -270,7 +269,7 @@ function pageView(sectionId, chapterId, pageArg) {
     <article class="theory page">${pages[page].html}</article>
     ${last && qc ? `<a class="btn wide" href="#/q/${s.id}/${ch.id}">Квиз по главе (${qc})</a>` : ''}
     <div class="pager">
-      ${prevHref ? `<a class="btn ghost" href="${prevHref}">‹ Назад</a>` : '<span></span>'}
+      ${prevHref ? `<a class="btn ghost" href="${prevHref}">‹ Назад</a>` : `<a class="btn ghost" href="#/s/${s.id}">‹ К главам</a>`}
       ${nextHref ? `<a class="btn ${last ? 'ghost' : ''}" href="${nextHref}">${last ? 'Следующая глава ›' : 'Дальше ›'}</a>` : `<a class="btn ghost" href="#/s/${s.id}">К разделу</a>`}
     </div>`);
 
