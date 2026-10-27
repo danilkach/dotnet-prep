@@ -147,13 +147,20 @@ function parent(parts) {
 }
 
 function route() {
-  const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
+  const [path, query] = location.hash.replace(/^#\/?/, '').split('?');
+  const parts = path.split('/').filter(Boolean);
+  const find = new URLSearchParams(query || '').get('find');
   backBtn.hidden = parts.length === 0;
-  backBtn.onclick = () => go(parent(parts));
+  backBtn.onclick = () => find || parts[0] === 'one' ? history.back() : go(parent(parts));
   window.scrollTo(0, 0);
   swipe = null;
 
-  if (parts[0] === 's' && parts[2] === 'c') return pageView(parts[1], parts[3], parts[4]);
+  if (parts[0] === 's' && parts[2] === 'c') {
+    pageView(parts[1], parts[3], parts[4]);
+    if (find) markFound(find);
+    return;
+  }
+  if (parts[0] === 'one') return oneQuestionView(parts[1]);
   if (parts[0] === 's') return sectionView(parts[1]);
   if (parts[0] === 'q') return quizStart(parts[1], parts[2]);
   if (parts[0] === 'settings') return settingsView();
@@ -180,6 +187,8 @@ function homeView() {
     html += `<button class="btn wide ghost" onclick="location.reload()">Доступно обновление — нажмите, чтобы загрузить</button>`;
   if (!SECTIONS.length)
     html += `<p class="muted">Разделы не загрузились.</p>`;
+  html += `<input type="search" id="search" class="search" placeholder="Поиск по теории и вопросам" autocomplete="off" value="${esc(lastQuery)}">
+    <div id="results"></div><div id="home-rest">`;
   html += `<a class="btn wide" href="#/q/all">${all.due ? `Повторить то, что пора (${all.due})` : 'Квиз по всем разделам'}</a>`;
   html += `<p class="muted">Выучено ${all.mastered} из ${all.total} вопросов</p><ul class="list">`;
   for (const s of SECTIONS) {
@@ -190,7 +199,118 @@ function homeView() {
       <div class="meter"><i style="width:${c.total ? Math.round(100 * c.mastered / c.total) : 0}%"></i></div>
     </a></li>`;
   }
-  render(html + '</ul>');
+  render(html + '</ul></div>');
+
+  const input = document.getElementById('search');
+  let timer = null;
+  input.oninput = () => { clearTimeout(timer); timer = setTimeout(() => showResults(input.value), 200); };
+  if (lastQuery) showResults(lastQuery);
+}
+
+// ---------- search ----------
+
+let lastQuery = '';
+let searchIndex = null;
+
+const normalize = s => s.toLowerCase().replace(/ё/g, 'е');
+
+function plainText(html) {
+  const div = document.createElement('div');
+  div.innerHTML = html;
+  return div.textContent.replace(/\s+/g, ' ').trim();
+}
+
+// Built once, the first time somebody searches: every page of every chapter, and every quiz question with
+// its answer, as plain text
+function buildIndex() {
+  const entries = [];
+  for (const s of SECTIONS) {
+    s.chapters.forEach((ch, ci) => pagesOf(ch).forEach((page, pi) => {
+      const text = plainText(page.html);
+      entries.push({ kind: 'page', href: `#/s/${s.id}/c/${ch.id}/${pi}`, where: `${s.title} · ${ci + 1}. ${ch.title}`, title: plainText(page.title), text, norm: normalize(text) });
+    }));
+    for (const q of s.questions) {
+      const text = plainText([q.q, ...(q.options || []), q.explain || '', q.type === 'open' ? q.answer : ''].join(' '));
+      const chapter = s.chapters.find(c => c.id === q.chapter);
+      entries.push({ kind: 'question', href: `#/one/${q.id}`, where: `${s.title} · вопрос${chapter ? ' · ' + chapter.title : ''}`, title: plainText(q.q).slice(0, 140), text, norm: normalize(text) });
+    }
+  }
+  return entries;
+}
+
+function snippet(entry, words) {
+  const at = Math.max(0, entry.norm.indexOf(words[0]));
+  const start = Math.max(0, at - 60);
+  let text = (start > 0 ? '…' : '') + entry.text.slice(start, at + 140) + (at + 140 < entry.text.length ? '…' : '');
+  let html = esc(text);
+  for (const word of words) {
+    const re = new RegExp(word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/е/g, '[её]'), 'gi');
+    html = html.replace(re, m => `<mark>${m}</mark>`);
+  }
+  return html;
+}
+
+function showResults(query) {
+  lastQuery = query;
+  const results = document.getElementById('results');
+  const rest = document.getElementById('home-rest');
+  const words = normalize(query).split(/\s+/).filter(w => w.length > 1);
+  if (!words.length) { results.innerHTML = ''; rest.hidden = false; return; }
+  searchIndex = searchIndex || buildIndex();
+  const found = searchIndex.filter(e => words.every(w => e.norm.includes(w)));
+  // Pages whose title matches come first, then pages, then questions
+  found.sort((a, b) => score(b, words) - score(a, words));
+  rest.hidden = true;
+  const find = encodeURIComponent(query.trim());
+  results.innerHTML = found.length
+    ? `<p class="muted">Найдено: ${found.length}${found.length > 60 ? ', показаны первые 60' : ''}</p><ul class="list">` +
+      found.slice(0, 60).map(e => `<li><a class="card" href="${e.href}${e.kind === 'page' ? `?find=${find}` : ''}">
+        <div class="sub">${esc(e.where)}</div>
+        <div><strong>${esc(e.title)}</strong></div>
+        <div class="sub">${snippet(e, words)}</div></a></li>`).join('') + '</ul>'
+    : `<p class="muted">Ничего не найдено</p>`;
+}
+
+function score(entry, words) {
+  const title = normalize(entry.title);
+  return (words.every(w => title.includes(w)) ? 10 : 0) + (entry.kind === 'page' ? 2 : 0);
+}
+
+// On a page opened from a search, the words are marked, a collapsed answer containing them is opened, and
+// the first of them is scrolled to
+function markFound(query) {
+  const words = normalize(query).split(/\s+/).filter(w => w.length > 1);
+  const article = view.querySelector('.theory.page');
+  if (!article || !words.length) return;
+  article.querySelectorAll('details').forEach(d => {
+    if (words.some(w => normalize(d.textContent).includes(w))) d.open = true;
+  });
+  const walker = document.createTreeWalker(article, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  const re = new RegExp('(' + words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/е/g, '[её]')).join('|') + ')', 'gi');
+  for (const node of nodes) {
+    if (!re.test(node.nodeValue)) continue;
+    re.lastIndex = 0;
+    const span = document.createElement('span');
+    span.innerHTML = esc(node.nodeValue).replace(re, '<mark>$1</mark>');
+    node.replaceWith(span);
+  }
+  article.querySelector('mark')?.scrollIntoView({ block: 'center' });
+}
+
+function oneQuestionView(id) {
+  const q = questionsOf().find(x => x.id === id);
+  if (!q) return go('#/');
+  const s = section(q.section);
+  setTitle('Вопрос');
+  render(`<div class="progress">${esc(s?.title || '')}</div><div class="q">
+    <div class="theory">${q.q}</div>
+    ${q.type === 'choice'
+      ? q.options.map((o, i) => `<div class="opt ${i === q.answer ? 'right' : ''}">${o}</div>`).join('') +
+        (q.explain ? `<div class="answer theory">${q.explain}</div>` : '')
+      : `<div class="answer theory">${q.answer}</div>`}
+  </div>`);
 }
 
 function sectionView(id) {

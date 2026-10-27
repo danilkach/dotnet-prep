@@ -134,3 +134,8 @@ details[open] summary::after { content: '－'; }
 details[open] summary { border-bottom: 1px solid var(--border); }
 details > :not(summary) { margin-left: 14px; margin-right: 14px; }
 details > :last-child { margin-bottom: 12px; }
+
+/* Search */
+.search { width: 100%; font: inherit; padding: 10px 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); margin-bottom: 12px; -webkit-appearance: none; }
+mark { background: #ffe58a; color: inherit; border-radius: 3px; padding: 0 1px; }
+@media (prefers-color-scheme: dark) { mark { background: #6b5a14; } }

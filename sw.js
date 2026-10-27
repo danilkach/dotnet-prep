@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump on every content change: a new version is what makes phones download the new files
-const VERSION = 'prep-4';
+const VERSION = 'prep-5';
 const FILES = [
   './',
   'index.html',
