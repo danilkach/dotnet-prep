@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump on every content change: a new version is what makes phones download the new files
-const VERSION = 'prep-2';
+const VERSION = 'prep-3';
 const FILES = [
   './',
   'index.html',
@@ -19,7 +19,11 @@ const FILES = [
 ];
 
 self.addEventListener('install', event => {
-  event.waitUntil(caches.open(VERSION).then(cache => cache.addAll(FILES)).then(() => self.skipWaiting()));
+  // `reload` skips the browser's own HTTP cache (GitHub Pages lets files be cached for ten minutes), or a new
+  // version could be installed with the previous version's files
+  event.waitUntil(caches.open(VERSION)
+    .then(cache => cache.addAll(FILES.map(file => new Request(file, { cache: 'reload' }))))
+    .then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', event => {
