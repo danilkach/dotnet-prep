@@ -1,12 +1,13 @@
 'use strict';
 
 // Bump on every content change: a new version is what makes phones download the new files
-const VERSION = 'prep-1';
+const VERSION = 'prep-2';
 const FILES = [
   './',
   'index.html',
   'styles.css',
   'app.js',
+  'highlight.js',
   'manifest.json',
   'icon-180.png',
   'icon-192.png',

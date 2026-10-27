@@ -7,6 +7,8 @@ const DAY = 24 * 60 * 60 * 1000;
 const INTERVALS = [0, 1, 3, 7, 16, 35];
 const SESSION_SIZE = 15;
 const MASTERED_BOX = 3;
+// A page longer than this is split again at its subheadings, so one page stays one idea
+const PAGE_TEXT_LIMIT = 2600;
 
 const view = document.getElementById('view');
 const titleEl = document.getElementById('title');
@@ -16,13 +18,14 @@ let state = load();
 let session = null;
 let updateReady = false;
 
+function fresh() { return { read: {}, seen: {}, at: {}, cards: {}, size: 17, wrap: true }; }
+
 function load() {
-  const empty = { read: {}, cards: {}, pos: {}, size: 17 };
   try {
     const raw = localStorage.getItem(KEY);
-    return raw ? Object.assign(empty, JSON.parse(raw)) : empty;
+    return raw ? Object.assign(fresh(), JSON.parse(raw)) : fresh();
   } catch {
-    return empty;
+    return fresh();
   }
 }
 
@@ -30,11 +33,13 @@ function save() {
   try { localStorage.setItem(KEY, JSON.stringify(state)); } catch { /* storage full or blocked: progress just isn't kept */ }
 }
 
-function applySize() {
+function applySettings() {
   document.documentElement.style.setProperty('--size', state.size + 'px');
+  document.body.classList.toggle('wrap-code', state.wrap !== false);
 }
 
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const textLength = html => html.replace(/<[^>]+>/g, '').length;
 
 function section(id) { return SECTIONS.find(s => s.id === id); }
 
@@ -44,6 +49,51 @@ function questionsOf(sectionId, chapterId) {
     .flatMap(s => s.questions.map(q => Object.assign({ section: s.id }, q)))
     .filter(q => !chapterId || q.chapter === chapterId);
 }
+
+// ---------- pages ----------
+
+const pageCache = new Map();
+
+// A chapter read one sub-topic at a time: each <h3> starts a page, and a page still too long to take in at
+// once is split again at its <h4>s, carrying its title along so the page says what it continues
+function pagesOf(chapter) {
+  if (pageCache.has(chapter)) return pageCache.get(chapter);
+  const parts = chapter.html.split(/(?=<h3[\s>])/).filter(part => part.trim());
+  if (parts.length > 1 && !/^\s*<h3/.test(parts[0])) parts.splice(0, 2, parts[0] + parts[1]);
+
+  const pages = [];
+  for (const part of parts) {
+    const title = (part.match(/<h3[^>]*>([\s\S]*?)<\/h3>/) || [])[1] || chapter.title;
+    if (textLength(part) <= PAGE_TEXT_LIMIT || !/<h4[\s>]/.test(part)) {
+      pages.push({ title, html: part });
+      continue;
+    }
+    const pieces = part.split(/(?=<h4[\s>])/);
+    let current = pieces.shift();
+    for (const piece of pieces) {
+      if (textLength(current) + textLength(piece) > PAGE_TEXT_LIMIT && textLength(current) > 600) {
+        pages.push({ title, html: current });
+        current = `<p class="cont">${title} — продолжение</p>` + piece;
+      } else current += piece;
+    }
+    pages.push({ title, html: current });
+  }
+  pageCache.set(chapter, pages);
+  return pages;
+}
+
+function seenOf(sectionId, chapterId) {
+  const key = `${sectionId}/${chapterId}`;
+  return (state.seen[key] = state.seen[key] || []);
+}
+
+function chapterRead(sectionId, chapter) {
+  return !!(state.read[sectionId] || {})[chapter.id];
+}
+
+function readCount(s) { return s.chapters.filter(c => chapterRead(s.id, c)).length; }
+
+// ---------- cards ----------
 
 function isDue(q, now) {
   const card = state.cards[q.id];
@@ -62,11 +112,6 @@ function counts(questions) {
     }
   }
   return { due, fresh, mastered, total: questions.length };
-}
-
-function readCount(s) {
-  const read = state.read[s.id] || {};
-  return s.chapters.filter(c => read[c.id]).length;
 }
 
 function shuffle(items) {
@@ -106,8 +151,9 @@ function route() {
   backBtn.hidden = parts.length === 0;
   backBtn.onclick = () => go(parent(parts));
   window.scrollTo(0, 0);
+  swipe = null;
 
-  if (parts[0] === 's' && parts[2] === 'c') return chapterView(parts[1], parts[3]);
+  if (parts[0] === 's' && parts[2] === 'c') return pageView(parts[1], parts[3], parts[4]);
   if (parts[0] === 's') return sectionView(parts[1]);
   if (parts[0] === 'q') return quizStart(parts[1], parts[2]);
   if (parts[0] === 'settings') return settingsView();
@@ -117,6 +163,11 @@ function route() {
 function setTitle(text) {
   titleEl.textContent = text;
   document.title = text;
+}
+
+function render(html) {
+  view.innerHTML = html;
+  window.highlightCode?.(view);
 }
 
 // ---------- views ----------
@@ -133,81 +184,120 @@ function homeView() {
   html += `<p class="muted">Выучено ${all.mastered} из ${all.total} вопросов</p><ul class="list">`;
   for (const s of SECTIONS) {
     const c = counts(questionsOf(s.id));
-    const read = readCount(s);
     html += `<li><a class="card" href="#/s/${s.id}">
       <div><strong>${esc(s.title)}</strong></div>
-      <div class="sub">Прочитано глав: ${read} из ${s.chapters.length} · вопросы: ${c.mastered}/${c.total}${c.due ? ` · пора повторить ${c.due}` : ''}</div>
+      <div class="sub">Прочитано глав: ${readCount(s)} из ${s.chapters.length} · вопросы: ${c.mastered}/${c.total}${c.due ? ` · пора повторить ${c.due}` : ''}</div>
       <div class="meter"><i style="width:${c.total ? Math.round(100 * c.mastered / c.total) : 0}%"></i></div>
     </a></li>`;
   }
-  view.innerHTML = html + '</ul>';
+  render(html + '</ul>');
 }
 
 function sectionView(id) {
   const s = section(id);
   if (!s) return go('#/');
   setTitle(s.title);
-  const read = state.read[s.id] || {};
   const c = counts(questionsOf(s.id));
   let html = `<a class="btn wide" href="#/q/${s.id}">Квиз по разделу${c.due ? ` · пора повторить ${c.due}` : ''}</a>`;
   html += `<p class="muted">Вопросов: ${c.total}, выучено ${c.mastered}, новых ${c.fresh}</p><ul class="list">`;
   s.chapters.forEach((ch, i) => {
+    const pages = pagesOf(ch).length;
+    const seen = seenOf(s.id, ch.id).filter(Boolean).length;
+    const read = chapterRead(s.id, ch);
     const qc = counts(questionsOf(s.id, ch.id));
-    html += `<li><a class="card${read[ch.id] ? ' done' : ''}" href="#/s/${s.id}/c/${ch.id}">
-      <div>${i + 1}. ${esc(ch.title)}${read[ch.id] ? ' ✓' : ''}</div>
-      <div class="sub">${qc.total ? `вопросов ${qc.total}, выучено ${qc.mastered}` : 'без вопросов'}</div>
+    const at = state.at[`${s.id}/${ch.id}`] || 0;
+    html += `<li><a class="card${read ? ' done' : ''}" href="#/s/${s.id}/c/${ch.id}/${read ? 0 : at}">
+      <div>${i + 1}. ${esc(ch.title)}${read ? ' ✓' : ''}</div>
+      <div class="sub">страниц ${pages}${seen && !read ? `, прочитано ${seen}` : ''} · ${qc.total ? `вопросов ${qc.total}, выучено ${qc.mastered}` : 'без вопросов'}</div>
     </a></li>`;
   });
-  view.innerHTML = html + '</ul>';
+  html += `</ul><button class="btn wide ghost" id="reset">Сбросить прогресс раздела</button>`;
+  render(html);
+
+  document.getElementById('reset').onclick = () => {
+    if (!confirm(`Сбросить прочитанное и ответы в разделе «${s.title}»?`)) return;
+    resetSection(s);
+    sectionView(id);
+  };
 }
 
-let scrollTimer = null;
+function resetSection(s) {
+  delete state.read[s.id];
+  for (const ch of s.chapters) {
+    delete state.seen[`${s.id}/${ch.id}`];
+    delete state.at[`${s.id}/${ch.id}`];
+  }
+  for (const q of s.questions) delete state.cards[q.id];
+  save();
+}
 
-function chapterView(sectionId, chapterId) {
+let swipe = null;
+
+function pageView(sectionId, chapterId, pageArg) {
   const s = section(sectionId);
   const index = s ? s.chapters.findIndex(c => c.id === chapterId) : -1;
   if (index < 0) return go('#/');
   const ch = s.chapters[index];
+  const pages = pagesOf(ch);
+  const page = Math.max(0, Math.min(pages.length - 1, Number(pageArg) || 0));
   const key = `${s.id}/${ch.id}`;
+
+  const seen = seenOf(s.id, ch.id);
+  seen[page] = true;
+  state.at[key] = page;
+  if (pages.every((_, i) => seen[i])) {
+    state.read[s.id] = state.read[s.id] || {};
+    state.read[s.id][ch.id] = true;
+  }
+  save();
+
   setTitle(ch.title);
-  const read = (state.read[s.id] || {})[ch.id];
-  const prev = s.chapters[index - 1];
-  const next = s.chapters[index + 1];
+  const prevChapter = s.chapters[index - 1];
+  const nextChapter = s.chapters[index + 1];
+  const prevHref = page > 0 ? `#/s/${s.id}/c/${ch.id}/${page - 1}`
+    : prevChapter ? `#/s/${s.id}/c/${prevChapter.id}/${pagesOf(prevChapter).length - 1}` : null;
+  const nextHref = page < pages.length - 1 ? `#/s/${s.id}/c/${ch.id}/${page + 1}`
+    : nextChapter ? `#/s/${s.id}/c/${nextChapter.id}/0` : null;
+  const last = page === pages.length - 1;
   const qc = questionsOf(s.id, ch.id).length;
 
-  view.innerHTML = `
-    <h2>${index + 1}. ${esc(ch.title)}</h2>
-    <article class="theory">${ch.html}</article>
-    <button class="btn wide ${read ? 'ghost' : ''}" id="mark">${read ? 'Прочитано ✓' : 'Отметить прочитанной'}</button>
-    ${qc ? `<a class="btn wide ghost" href="#/q/${s.id}/${ch.id}">Квиз по главе (${qc})</a>` : ''}
+  const chain = pages.map((_, i) =>
+    `<a class="${i === page ? 'now' : seen[i] ? 'seen' : ''}" href="#/s/${s.id}/c/${ch.id}/${i}" aria-label="Страница ${i + 1}"></a>`).join('');
+
+  render(`
+    <div class="chain">${chain}</div>
+    <div class="where">Глава ${index + 1} из ${s.chapters.length} · страница ${page + 1} из ${pages.length}</div>
+    <article class="theory page">${pages[page].html}</article>
+    ${last && qc ? `<a class="btn wide" href="#/q/${s.id}/${ch.id}">Квиз по главе (${qc})</a>` : ''}
     <div class="pager">
-      ${prev ? `<a class="btn ghost" href="#/s/${s.id}/c/${prev.id}">‹ Назад</a>` : '<span></span>'}
-      ${next ? `<a class="btn ghost" href="#/s/${s.id}/c/${next.id}">Дальше ›</a>` : '<span></span>'}
-    </div>`;
+      ${prevHref ? `<a class="btn ghost" href="${prevHref}">‹ Назад</a>` : '<span></span>'}
+      ${nextHref ? `<a class="btn ${last ? 'ghost' : ''}" href="${nextHref}">${last ? 'Следующая глава ›' : 'Дальше ›'}</a>` : `<a class="btn ghost" href="#/s/${s.id}">К разделу</a>`}
+    </div>`);
 
-  document.getElementById('mark').onclick = () => {
-    state.read[s.id] = state.read[s.id] || {};
-    state.read[s.id][ch.id] = !state.read[s.id][ch.id];
-    save();
-    chapterView(sectionId, chapterId);
-  };
-
-  const saved = state.pos[key];
-  if (saved) requestAnimationFrame(() => window.scrollTo(0, saved));
-  window.onscroll = () => {
-    clearTimeout(scrollTimer);
-    scrollTimer = setTimeout(() => {
-      if (!location.hash.endsWith('/c/' + ch.id)) return;
-      state.pos[key] = Math.round(window.scrollY);
-      save();
-    }, 400);
-  };
+  swipe = { prev: prevHref, next: nextHref };
 }
+
+// Swiping a page sideways turns it, but only a clearly horizontal gesture that started outside a code block,
+// since code scrolls sideways itself
+let touch = null;
+document.addEventListener('touchstart', e => {
+  if (!swipe || e.touches.length !== 1 || e.target.closest('pre, table')) { touch = null; return; }
+  touch = { x: e.touches[0].clientX, y: e.touches[0].clientY, t: Date.now() };
+}, { passive: true });
+document.addEventListener('touchend', e => {
+  if (!touch || !swipe) return;
+  const dx = e.changedTouches[0].clientX - touch.x;
+  const dy = e.changedTouches[0].clientY - touch.y;
+  const quick = Date.now() - touch.t < 700;
+  touch = null;
+  if (!quick || Math.abs(dx) < 70 || Math.abs(dy) > Math.abs(dx) * 0.6) return;
+  const target = dx < 0 ? swipe.next : swipe.prev;
+  if (target) go(target);
+}, { passive: true });
 
 // ---------- quiz ----------
 
 function quizStart(sectionId, chapterId) {
-  window.onscroll = null;
   const all = sectionId === 'all' || !sectionId;
   const pool = questionsOf(all ? null : sectionId, chapterId);
   const s = all ? null : section(sectionId);
@@ -215,79 +305,80 @@ function quizStart(sectionId, chapterId) {
   setTitle('Квиз · ' + (label || ''));
 
   if (!pool.length) {
-    view.innerHTML = `<p class="muted">Здесь пока нет вопросов.</p>`;
+    render(`<p class="muted">Здесь пока нет вопросов.</p>`);
     return;
   }
 
   const now = Date.now();
   const due = shuffle(pool.filter(q => isDue(q, now)));
-  const fresh = shuffle(pool.filter(q => !state.cards[q.id]));
-  let picked = due.concat(fresh).slice(0, SESSION_SIZE);
+  const unseen = shuffle(pool.filter(q => !state.cards[q.id]));
+  const picked = due.concat(unseen).slice(0, SESSION_SIZE);
 
   if (!picked.length) {
-    view.innerHTML = `
+    render(`
       <p>Всё, что здесь есть, уже повторено — следующее подойдёт позже.</p>
-      <button class="btn wide" id="anyway">Пройти всё равно (${Math.min(SESSION_SIZE, pool.length)})</button>`;
-    document.getElementById('anyway').onclick = () => {
-      const items = shuffle(pool).slice(0, SESSION_SIZE);
-      session = { items, i: 0, right: 0, retry: [], firstPass: items.length };
-      showQuestion();
-    };
+      <button class="btn wide" id="anyway">Пройти всё равно (${Math.min(SESSION_SIZE, pool.length)})</button>`);
+    document.getElementById('anyway').onclick = () => startSession(shuffle(pool).slice(0, SESSION_SIZE));
     return;
   }
 
-  session = { items: picked, i: 0, right: 0, retry: [], firstPass: picked.length };
+  startSession(picked);
+}
+
+function startSession(items) {
+  session = { items, i: 0, right: 0, retry: [], firstPass: items.length, graded: {} };
   showQuestion();
 }
 
 function showQuestion() {
   window.scrollTo(0, 0);
   if (session.i >= session.items.length) {
-    if (session.retry.length) {
-      // What was missed comes round once more before the session ends
-      session.items = session.items.concat(session.retry);
-      session.retry = [];
-      session.repeating = true;
-    } else return finish();
+    if (!session.retry.length) return finish();
+    // What was missed comes round once more before the session ends
+    session.items = session.items.concat(shuffle(session.retry));
+    session.retry = [];
   }
   const q = session.items[session.i];
   const s = section(q.section);
   const chapter = s?.chapters.find(c => c.id === q.chapter);
-  const progress = `<div class="progress">${session.i + 1} из ${session.items.length}${session.repeating && session.i >= session.firstPass ? ' · повтор' : ''} · ${esc(s?.title || '')}${chapter ? ' · ' + esc(chapter.title) : ''}</div>`;
+  const progress = `<div class="progress">${session.i + 1} из ${session.items.length}${session.i >= session.firstPass ? ' · повтор' : ''} · ${esc(s?.title || '')}${chapter ? ' · ' + esc(chapter.title) : ''}</div>`;
 
   if (q.type === 'choice') {
+    // Options are shuffled every time a question is shown, so the right one is never remembered by its place
     const order = shuffle(q.options.map((text, index) => ({ text, index })));
-    view.innerHTML = `${progress}<div class="q">
+    render(`${progress}<div class="q">
       <div class="kind">Выберите ответ</div>
       <div class="theory">${q.q}</div>
       <div id="opts">${order.map(o => `<button class="opt" data-i="${o.index}">${o.text}</button>`).join('')}</div>
-      <div id="after"></div></div>`;
+      <div id="after"></div></div>`);
     view.querySelectorAll('.opt').forEach(btn => btn.onclick = () => {
-      const chosen = Number(btn.dataset.i);
-      const right = chosen === q.answer;
+      const right = Number(btn.dataset.i) === q.answer;
       view.querySelectorAll('.opt').forEach(b => {
         b.disabled = true;
         if (Number(b.dataset.i) === q.answer) b.classList.add('right');
         else if (b === btn) b.classList.add('wrong');
       });
-      if (!session.graded?.[q.id]) {
+      if (!session.graded[q.id]) {
         grade(q, right ? boxOf(q) + 1 : 0, right);
-        session.graded = Object.assign(session.graded || {}, { [q.id]: true });
+        session.graded[q.id] = true;
         if (right) session.right++; else session.retry.push(q);
       }
-      document.getElementById('after').innerHTML = `
+      const after = document.getElementById('after');
+      after.innerHTML = `
         <div class="verdict ${right ? 'right' : 'wrong'}">${right ? 'Верно' : 'Неверно'}</div>
         ${q.explain ? `<div class="answer theory">${q.explain}</div>` : ''}
         <button class="btn wide" id="next">Дальше</button>`;
+      window.highlightCode?.(after);
       document.getElementById('next').onclick = nextQuestion;
     });
   } else {
-    view.innerHTML = `${progress}<div class="q">
+    render(`${progress}<div class="q">
       <div class="kind">Ответьте вслух, затем сверьтесь</div>
       <div class="theory">${q.q}</div>
-      <div id="after"><button class="btn wide" id="reveal">Показать ответ</button></div></div>`;
+      <div id="after"><button class="btn wide" id="reveal">Показать ответ</button></div></div>`);
     document.getElementById('reveal').onclick = () => {
-      document.getElementById('after').innerHTML = `
+      const after = document.getElementById('after');
+      after.innerHTML = `
         <div class="answer theory">${q.answer}</div>
         <p class="muted">Как получилось?</p>
         <div class="row">
@@ -295,12 +386,13 @@ function showQuestion() {
           <button class="btn ghost" data-g="1">Частично</button>
           <button class="btn" data-g="2">Знал</button>
         </div>`;
+      window.highlightCode?.(after);
       view.querySelectorAll('[data-g]').forEach(btn => btn.onclick = () => {
         const g = Number(btn.dataset.g);
-        if (!session.graded?.[q.id]) {
+        if (!session.graded[q.id]) {
           const box = boxOf(q);
           grade(q, g === 0 ? 0 : g === 1 ? Math.max(1, box) : box + 1, g === 2);
-          session.graded = Object.assign(session.graded || {}, { [q.id]: true });
+          session.graded[q.id] = true;
           if (g === 2) session.right++;
           if (g === 0) session.retry.push(q);
         }
@@ -316,29 +408,29 @@ function nextQuestion() {
 }
 
 function finish() {
-  const total = Object.keys(session.graded || {}).length;
-  view.innerHTML = `
+  const total = Object.keys(session.graded).length;
+  render(`
     <h2>Готово</h2>
     <p>Без ошибок: ${session.right} из ${total}.</p>
     <p class="muted">Ошибки вернутся раньше остальных: через несколько минут, затем через день, три, неделю и дальше по мере того, как вы их запоминаете.</p>
-    <button class="btn wide" onclick="history.back()">Вернуться</button>`;
+    <button class="btn wide" onclick="history.back()">Вернуться</button>`);
   session = null;
 }
 
 // ---------- settings ----------
 
 function settingsView() {
-  window.onscroll = null;
   setTitle('Настройки');
   const all = counts(questionsOf());
   const readTotal = SECTIONS.reduce((n, s) => n + readCount(s), 0);
   const chapterTotal = SECTIONS.reduce((n, s) => n + s.chapters.length, 0);
-  view.innerHTML = `
-    <h2>Размер текста</h2>
+  render(`
+    <h2>Текст</h2>
     <div class="row">
       <button class="btn ghost" id="smaller">A−</button>
       <button class="btn ghost" id="bigger">A+</button>
     </div>
+    <button class="btn wide ghost" id="wrap">${state.wrap !== false ? 'Код: переносить длинные строки ✓' : 'Код: прокручивать вбок'}</button>
     <h2>Прогресс</h2>
     <div class="stat"><span>Прочитано глав</span><span>${readTotal} из ${chapterTotal}</span></div>
     <div class="stat"><span>Вопросов выучено</span><span>${all.mastered} из ${all.total}</span></div>
@@ -349,10 +441,12 @@ function settingsView() {
     <textarea id="data" placeholder="Вставьте сюда сохранённый прогресс"></textarea>
     <button class="btn wide ghost" id="import">Восстановить из вставленного</button>
     <h2>Сброс</h2>
-    <button class="btn wide ghost" id="reset">Сбросить весь прогресс</button>`;
+    <p class="muted">Прогресс одного раздела сбрасывается на странице этого раздела.</p>
+    <button class="btn wide ghost" id="reset">Сбросить весь прогресс</button>`);
 
-  document.getElementById('smaller').onclick = () => { state.size = Math.max(14, state.size - 1); applySize(); save(); };
-  document.getElementById('bigger').onclick = () => { state.size = Math.min(24, state.size + 1); applySize(); save(); };
+  document.getElementById('smaller').onclick = () => { state.size = Math.max(14, state.size - 1); applySettings(); save(); };
+  document.getElementById('bigger').onclick = () => { state.size = Math.min(24, state.size + 1); applySettings(); save(); };
+  document.getElementById('wrap').onclick = () => { state.wrap = state.wrap === false; applySettings(); save(); settingsView(); };
   document.getElementById('export').onclick = async () => {
     const json = JSON.stringify(state);
     document.getElementById('data').value = json;
@@ -362,13 +456,13 @@ function settingsView() {
     try {
       const parsed = JSON.parse(document.getElementById('data').value);
       if (!parsed || typeof parsed.cards !== 'object') throw new Error();
-      state = Object.assign({ read: {}, cards: {}, pos: {}, size: 17 }, parsed);
-      save(); applySize(); alert('Прогресс восстановлен'); go('#/');
+      state = Object.assign(fresh(), parsed);
+      save(); applySettings(); alert('Прогресс восстановлен'); go('#/');
     } catch { alert('Это не похоже на сохранённый прогресс'); }
   };
   document.getElementById('reset').onclick = () => {
-    if (!confirm('Сбросить прочитанные главы и все ответы?')) return;
-    state = { read: {}, cards: {}, pos: {}, size: state.size };
+    if (!confirm('Сбросить прочитанные главы и все ответы во всех разделах?')) return;
+    state = Object.assign(fresh(), { size: state.size, wrap: state.wrap });
     save(); go('#/');
   };
 }
@@ -377,7 +471,7 @@ function settingsView() {
 
 document.getElementById('settings').onclick = () => go('#/settings');
 window.addEventListener('hashchange', route);
-applySize();
+applySettings();
 route();
 
 if ('serviceWorker' in navigator) {

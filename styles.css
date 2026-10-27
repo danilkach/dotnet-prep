@@ -98,3 +98,29 @@ th { background: var(--code-bg); }
 .progress { color: var(--muted); font-size: 0.85em; margin-bottom: 8px; }
 textarea { width: 100%; min-height: 140px; font: 0.8em ui-monospace, Menlo, monospace; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); padding: 8px; }
 .stat { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border); }
+
+/* Reading one page at a time */
+.chain { display: flex; gap: 4px; margin: 0 0 6px; }
+.chain a { flex: 1; height: 5px; border-radius: 3px; background: var(--border); }
+.chain a.seen { background: var(--muted); }
+.chain a.now { background: var(--accent); }
+.where { color: var(--muted); font-size: 0.8em; margin-bottom: 4px; }
+.page > h3:first-child { margin-top: 0.4em; }
+.cont { color: var(--muted); font-size: 0.85em; font-style: italic; }
+
+/* Code */
+body.wrap-code pre code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.hl-keyword { color: #0b5cad; font-weight: 600; }
+.hl-type { color: #1d7a74; }
+.hl-string { color: #a3431a; }
+.hl-number { color: #7a3fb0; }
+.hl-comment { color: #6f7a6a; font-style: italic; }
+.hl-attr { color: #8a6d00; }
+@media (prefers-color-scheme: dark) {
+  .hl-keyword { color: #79b0f2; }
+  .hl-type { color: #5fd3c6; }
+  .hl-string { color: #f0a070; }
+  .hl-number { color: #c79bf2; }
+  .hl-comment { color: #8d9a88; }
+  .hl-attr { color: #e3c25a; }
+}
