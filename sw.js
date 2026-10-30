@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump on every content change: a new version is what makes phones download the new files
-const VERSION = 'prep-12';
+const VERSION = 'prep-13';
 const FILES = [
   './',
   'index.html',
@@ -23,7 +23,8 @@ const FILES = [
   'sections/personal.lock.js',
   'sections/redis.js',
   'sections/security.js',
-  'sections/diagnostics.js'
+  'sections/diagnostics.js',
+  'sections/network.js'
 ];
 
 self.addEventListener('install', event => {
